@@ -74,6 +74,7 @@ int main(int argc, char** argv)
         CloseHandle(hFile);
         return EXIT_FAILURE;
     }
+    
 
     // 编译规则
     YR_RULES* rules;

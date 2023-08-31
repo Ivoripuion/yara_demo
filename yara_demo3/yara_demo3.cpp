@@ -5,17 +5,24 @@
 #include <thread>
 #include <mutex>
 
-#define RULES_DIR "D:\\workstation\\yara_demo\\yara_demo\\rules"
-#define SCAN_DIR "D:\\workstation\\yara_demo\\yara_demo\\scan"
-
-std::mutex m; // 创建互斥锁
+std::mutex m; // 创建扫描的互斥锁
+std::mutex print_mutex; // 创建用于输出的互斥锁
 std::vector<std::string> scan_files; // 用于保存扫描的文件列表
+
+struct CallbackData {
+    const char* file_path;
+    LONGLONG start_time;
+};
 
 int my_callback_function(YR_SCAN_CONTEXT* context, int message, void* message_data, void* user_data)
 {
+    CallbackData* data = (CallbackData*)user_data;
+
     if (message == CALLBACK_MSG_RULE_MATCHING) {
-        std::cout << "Matched!" << std::endl;
-        return CALLBACK_ABORT;
+        YR_RULE* rule = (YR_RULE*)message_data;
+        std::lock_guard<std::mutex> lock(print_mutex); // 加锁
+        std::cout << "Matched Rule: " << rule->identifier << std::endl;
+        std::cout << "Matched File: " << data->file_path << std::endl;
     }
 
     if (message == CALLBACK_MSG_SCAN_FINISHED) {
@@ -23,7 +30,8 @@ int my_callback_function(YR_SCAN_CONTEXT* context, int message, void* message_da
         QueryPerformanceCounter(&liFinishTime); // 获取结束时间
         LARGE_INTEGER liFrequency; // 计时器频率
         QueryPerformanceFrequency(&liFrequency);
-        double elapsedTime = static_cast<double>(liFinishTime.QuadPart - *reinterpret_cast<LONGLONG*>(user_data)) / liFrequency.QuadPart; // 计算扫描时间
+        double elapsedTime = static_cast<double>(liFinishTime.QuadPart - data->start_time) / liFrequency.QuadPart; // 计算扫描时间
+        std::lock_guard<std::mutex> lock(print_mutex); // 加锁
         std::cout << "Elapsed Time: " << elapsedTime << " s" << std::endl; // 输出扫描时间
         return CALLBACK_ABORT;
     }
@@ -34,7 +42,8 @@ int my_callback_function(YR_SCAN_CONTEXT* context, int message, void* message_da
 void scan_file(YR_RULES* rules, const std::string& file_path, LONGLONG start_time)
 {
     std::lock_guard<std::mutex> lock(m); // 加锁
-    int result = yr_rules_scan_file(rules, file_path.c_str(), SCAN_FLAGS_FAST_MODE, my_callback_function, &start_time, 1000); // 将开始时间指针传递给回调函数
+    CallbackData data = { file_path.c_str(), start_time };
+    int result = yr_rules_scan_file(rules, file_path.c_str(), SCAN_FLAGS_FAST_MODE, my_callback_function, &data, 1000);
     if (result != ERROR_SUCCESS) {
         std::cerr << "Failed to scan file with Yara rules: " << file_path << std::endl;
         return;
@@ -43,6 +52,14 @@ void scan_file(YR_RULES* rules, const std::string& file_path, LONGLONG start_tim
 
 int main(int argc, char** argv)
 {
+    if (argc != 3) {
+        std::cerr << "Usage: file_scan.exe [rules_dir_path] [samples_dir_path]\n";
+        return EXIT_FAILURE;
+    }
+
+    const char* RULES_DIR = argv[1];
+    const char* SCAN_DIR = argv[2];
+
     // 打开rule目录
     WIN32_FIND_DATAA find_data;
     HANDLE hFind = FindFirstFileA((std::string(RULES_DIR) + "\\*").c_str(), &find_data);
